@@ -1,3 +1,97 @@
+# generate_parameter_library — Rekise fork
+
+> Rekise fork of [`generate_parameter_library`](#generate_parameter_library). It adds a
+> per-node **override layer** (`user_config`) and **behaviour flags** that control, for a
+> runtime parameter change, *whether it applies live* and *whether it persists*.
+> The original upstream README is kept in full **below this section**.
+
+## What this fork adds
+
+### 1. Behaviour flags (in your `param_def.yaml`)
+
+| flag | live `ros2 param set` | written to `user_config` | applied on next configure / relaunch |
+|---|---|---|---|
+| *(none — normal)* | ✅ applied | ✅ yes | ✅ |
+| `volatile: true` | ✅ applied | ❌ no | — |
+| `required_restart: true` | ❌ rejected | ✅ yes | ✅ |
+| `read_only: true` | ❌ rejected *(native)* | ❌ | — |
+
+`volatile` and `required_restart` are mutually exclusive (codegen errors if both set).
+
+```yaml
+my_node:
+  publish_rate_hz:
+    type: double
+    default_value: 1.0
+    required_restart: true     # save now, apply on next launch (not live)
+  gain:
+    type: double
+    default_value: 2.0
+    volatile: true             # apply live, never saved
+  fluid_density:
+    type: double
+    default_value: 1029.0      # normal: apply live + save
+```
+
+### 2. The override file (`user_config`)
+
+A small ROS-format file holding only the changed values:
+
+```yaml
+my_node:
+  ros__parameters:
+    fluid_density: 1035.0
+```
+
+Point a node at it (typically in `on_configure`):
+
+```cpp
+param_listener_->set_override_file("/path/to/user_config.yaml");
+```
+
+### 3. How it works
+
+**At startup / on configure** — `set_override_file()`:
+1. loads the override file and applies each value on top of the base/default params (validated by the generated code);
+2. remembers the path for persistence.
+
+`required_restart` values are applied **here** — this is the "restart" moment (a lifecycle `cleanup → configure` re-reads the file).
+
+**On a runtime `ros2 param set`** — the generated `update()` callback:
+1. validates against the schema (type / bounds) — invalid → reject (nothing changes);
+2. then branches by flag:
+   - `volatile` → apply live, **not** persisted;
+   - `required_restart` → **reject live** (running value unchanged), **persist** to `user_config`;
+   - *normal* → apply live **and** persist.
+
+Persistence is **persist-before-commit**: validate → write a temp file → atomic `rename`. A failed persist never throws out of the callback.
+
+```
+ros2 param set (runtime)                 set_override_file (startup / re-configure)
+        │                                          │
+   validate vs schema                         load user_config
+        │                                          │ (loading_override_ = true:
+   ┌────┴─────┬───────────────┐                    │  bypass required_restart reject)
+volatile   normal      required_restart       apply each value on top of base
+ apply     apply+save   reject + save              │
+           │            │  └──────────────────► applied on next configure ✔
+        user_config ◄───┘
+```
+
+### Supported value types
+Scalars + `double_array` / `int_array` / `bool_array` / `string_array`.
+**Not** supported: `byte_array`; and a single atomic `set_parameters([...])` batch that
+contains a `required_restart` param defers the **whole** batch (fine for one-param `ros2 param set`).
+
+### Build dependency
+Adds **`yaml-cpp`** (wired into `package.xml` and the `generate_parameter_library` CMake macro).
+
+---
+
+<br>
+
+# Upstream README
+
 # generate_parameter_library
 Generate C++ or Python code for ROS 2 parameter declaration, getting, and validation using declarative YAML.
 The generated library contains a C++ struct with specified parameters.

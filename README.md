@@ -33,7 +33,83 @@ my_node:
     default_value: 1029.0      # normal: apply live + save
 ```
 
-### 2. The override file (`user_config`)
+### 2. Allowed parameter definition (full reference)
+
+A parameter entry may use these keys:
+
+| key | required | meaning |
+|---|---|---|
+| `type` | ✅ | `int` / `double` / `bool` / `string` and their `_array` forms (and fixed `_array_<N>`) |
+| `default_value` | | compiled-in default used when nothing overrides it |
+| `description` | | human-readable doc string |
+| `validation` | | validator functions (`bounds<>`, `lt<>`, `gt<>`, `lt_eq<>`, `gt_eq<>`, `one_of<>`, `fixed_size<>`, `size_gt<>`, `not_empty`, …) |
+| `additional_constraints` | | free-text note appended to the description |
+| `read_only` | | reject any live change (set once at declaration) — native |
+| `volatile` | | **[fork]** apply live, never persisted |
+| `required_restart` | | **[fork]** persist; not applied live; applies on next configure/relaunch |
+
+> `volatile` and `required_restart` cannot both be set on the same parameter.
+
+Example covering every allowed field:
+
+```yaml
+my_node:
+  # normal numeric param with bounds — applies live AND persists
+  fluid_density:
+    type: double
+    default_value: 1029.0
+    description: "Water density (kg/m^3)"
+    validation:
+      bounds<>: [1.0, 1100.0]
+
+  # restart-only param — saved on set, applied on next launch/configure
+  publish_rate_hz:
+    type: double
+    default_value: 1.0
+    description: "Publish rate (Hz)"
+    required_restart: true
+    validation:
+      bounds<>: [1.0, 10.0]
+
+  # volatile toggle — applies live, never written to user_config
+  debug_enabled:
+    type: bool
+    default_value: false
+    description: "Verbose debug logging"
+    volatile: true
+
+  # structural / read-only — cannot change at runtime
+  frame_id:
+    type: string
+    default_value: "base_link"
+    read_only: true
+    description: "TF frame"
+
+  # enum-style validation
+  mode:
+    type: string
+    default_value: "auto"
+    validation:
+      one_of<>: [["auto", "manual", "off"]]
+
+  # array param (persists; reloaded at launch)
+  calib_offsets:
+    type: double_array
+    default_value: [0.0, 0.0, 0.0]
+    description: "Per-axis offsets"
+    validation:
+      fixed_size<>: 3
+
+  # nested group (params live under a sub-struct)
+  filtering:
+    window:
+      type: int
+      default_value: 5
+      validation:
+        gt_eq<>: [1]
+```
+
+### 3. The override file (`user_config`)
 
 A small ROS-format file holding only the changed values:
 
@@ -49,7 +125,7 @@ Point a node at it (typically in `on_configure`):
 param_listener_->set_override_file("/path/to/user_config.yaml");
 ```
 
-### 3. How it works
+### 4. How it works
 
 **At startup / on configure** — `set_override_file()`:
 1. loads the override file and applies each value on top of the base/default params (validated by the generated code);

@@ -319,7 +319,7 @@ struct StackParams {
         if (kRequiredRestartParams.count(r)) needs_restart = true;
         if (!kVolatileParams.count(r)) to_persist.push_back(p);
       }
-      if (needs_restart) {
+      if (needs_restart && !loading_override_) {
         // values already validated above; save for next launch, do NOT apply live
         persist_runtime_override(override_file_, to_persist);
         rcl_interfaces::msg::SetParametersResult result;
@@ -332,8 +332,10 @@ struct StackParams {
       if (user_callback_) {
          user_callback_(updated_params);
       }
-      // [rekise] persist accepted changes (volatile excluded); no-op if no override file set
-      persist_runtime_override(override_file_, to_persist);
+      // [rekise] persist accepted changes (volatile excluded); skip while loading overrides
+      if (!loading_override_) {
+        persist_runtime_override(override_file_, to_persist);
+      }
       return rsl::to_parameter_result_msg({});
     }
 
@@ -394,6 +396,7 @@ struct StackParams {
       if (!rp || !rp.IsMap()) {
         return;
       }
+      loading_override_ = true;  // [rekise] applying persisted overrides -> apply even required_restart, don't re-persist
       for (auto it = rp.begin(); it != rp.end(); ++it) {
         const std::string name = prefix_ + it->first.as<std::string>();
         if (!parameters_interface_->has_parameter(name)) {
@@ -413,11 +416,12 @@ struct StackParams {
             case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:  p = rclcpp::Parameter(name, it->second.as<std::vector<std::string>>()); break;
             default: continue;
           }
-          parameters_interface_->set_parameters({p});   // -> update(): validate + apply + persist (no-op)
+          parameters_interface_->set_parameters({p});   // -> update(): validate + apply (restart-reject bypassed)
         } catch (...) {
           // read-only / type mismatch / invalid -> skip this key, keep going
         }
       }
+      loading_override_ = false;
     }
 
     private:
@@ -433,6 +437,7 @@ struct StackParams {
       std::shared_ptr<rclcpp::node_interfaces::NodeParametersInterface> parameters_interface_;
       userParameterUpdateCB user_callback_;
       std::string override_file_;  // [rekise] override-layer file for persistence (empty = disabled)
+      bool loading_override_ = false;  // [rekise] true while applying overrides: bypass restart-reject + skip persist
 
       rclcpp::Logger logger_;
       std::mutex mutable mutex_;

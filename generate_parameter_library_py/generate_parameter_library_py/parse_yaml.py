@@ -763,6 +763,8 @@ def preprocess_inputs(language, name, value, nested_name_list):
         'default_value',
         'description',
         'read_only',
+        'volatile',          # [rekise] apply live, never persisted
+        'required_restart',  # [rekise] persist to override layer, applies next launch (not live)
         'additional_constraints',
         'validation',
         'type',
@@ -787,6 +789,12 @@ def preprocess_inputs(language, name, value, nested_name_list):
 
     description = value.get('description', '')
     read_only = bool(value.get('read_only', False))
+    volatile_flag = bool(value.get('volatile', False))            # [rekise]
+    required_restart = bool(value.get('required_restart', False))  # [rekise]
+    if volatile_flag and required_restart:
+        raise compile_error(
+            "Parameter %s cannot be both 'volatile' and 'required_restart'" % param_name
+        )
     validations = []
     additional_constraints = value.get('additional_constraints', '')
     validations_dict = value.get('validation', {})
@@ -807,6 +815,8 @@ def preprocess_inputs(language, name, value, nested_name_list):
         read_only,
         validations,
         additional_constraints,
+        volatile_flag,        # [rekise]
+        required_restart,     # [rekise]
     )
 
 
@@ -842,6 +852,8 @@ class GenerateCode:
         self.declare_parameter_sets = []
         self.set_stack_params = []
         self.user_validation_file = ''
+        self.volatile_params = []          # [rekise] names: apply live, never persist
+        self.required_restart_params = []  # [rekise] names: persist, applies next launch (not live)
 
     def parse(self, yaml_file, validate_header):
         with open(yaml_file) as f:
@@ -868,6 +880,8 @@ class GenerateCode:
             read_only,
             validations,
             additional_constraints,
+            volatile_flag,        # [rekise]
+            required_restart,     # [rekise]
         ) = preprocess_inputs(self.language, name, value, nested_name_list)
         # Skip accepted params that do not generate code for code-generation targets.
         # Documentation targets still need to keep these entries (e.g. type: none).
@@ -878,6 +892,11 @@ class GenerateCode:
             return
 
         param_name = code_gen_variable.param_name
+        # [rekise] record behaviour flags by param name for the runtime callback
+        if volatile_flag:
+            self.volatile_params.append(param_name)
+        if required_restart:
+            self.required_restart_params.append(param_name)
         update_parameter_invalid = (
             code_gen_variable.conversion.update_parameter_fail_validation()
         )
@@ -1024,6 +1043,8 @@ class GenerateCode:
                 [str(x) for x in self.update_declare_dynamic_parameter]
             ),
             'set_stack_params': '\n'.join([str(x) for x in self.set_stack_params]),
+            'volatile_params': self.volatile_params,                  # [rekise]
+            'required_restart_params': self.required_restart_params,  # [rekise]
             # TODO support removing runtime parameters
             # "remove_dynamic_parameters": "\n".join(
             #     [str(x) for x in self.remove_dynamic_parameter]

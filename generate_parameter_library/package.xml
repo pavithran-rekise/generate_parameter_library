@@ -24,6 +24,7 @@
   <depend>rsl</depend>
   <depend>tcb_span</depend>
   <depend>libexpected-dev</depend>
+  <depend>yaml-cpp</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

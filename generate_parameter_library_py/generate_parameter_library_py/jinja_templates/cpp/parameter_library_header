@@ -25,6 +25,12 @@
 #include <rsl/static_vector.hpp>
 #include <rsl/parameter_validators.hpp>
 
+// [rekise] for persisting accepted runtime changes into the override layer
+#include <yaml-cpp/yaml.h>
+#include <fstream>
+#include <cstdio>
+#include <set>
+
 {% if user_validation_file|length -%}
 #include "{{user_validation_file}}"
 {% endif %}
@@ -83,6 +89,98 @@ struct StackParams {
 {% endfilter -%}
 };
 {%- endfilter %}
+
+  // [rekise] Persist accepted runtime parameter changes into the override layer file.
+  // Runs inside the on-set callback (after validation, before ROS commits) = persist-before-commit.
+  // The override file must already exist with a single top-level node-FQN key (generate.py creates it).
+  inline void persist_runtime_override(const std::string & file,
+                                       const std::vector<rclcpp::Parameter> & parameters) {
+    if (file.empty()) {
+      return;
+    }
+    YAML::Node root;
+    try {
+      root = YAML::LoadFile(file);
+    } catch (...) {
+      return;
+    }
+    if (!root || !root.IsMap() || root.size() == 0) {
+      return;
+    }
+    const std::string fqn = root.begin()->first.as<std::string>();
+    YAML::Node rp = root[fqn]["ros__parameters"];
+    std::stringstream before; before << root;   // snapshot to detect a no-op change
+    for (const auto & p : parameters) {
+      const std::string n = p.get_name();
+      switch (p.get_type()) {
+        case rclcpp::ParameterType::PARAMETER_DOUBLE: {
+          // force a float-looking scalar so it round-trips as double (not int) on reload
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "%.17g", p.as_double());
+          std::string s(buf);
+          if (s.find_first_of(".eEnN") == std::string::npos) {
+            s += ".0";
+          }
+          rp[n] = YAML::Load(s);
+          break;
+        }
+        case rclcpp::ParameterType::PARAMETER_INTEGER: rp[n] = p.as_int();    break;
+        case rclcpp::ParameterType::PARAMETER_BOOL:    rp[n] = p.as_bool();   break;
+        case rclcpp::ParameterType::PARAMETER_STRING:  rp[n] = p.as_string(); break;
+        case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY: {
+          YAML::Node seq;
+          for (double d : p.as_double_array()) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g", d);
+            std::string s(buf);
+            if (s.find_first_of(".eEnN") == std::string::npos) {
+              s += ".0";   // keep each element a double on reload
+            }
+            seq.push_back(YAML::Load(s));
+          }
+          rp[n] = seq;
+          break;
+        }
+        case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY: {
+          YAML::Node seq;
+          for (int64_t v : p.as_integer_array()) seq.push_back(v);
+          rp[n] = seq;
+          break;
+        }
+        case rclcpp::ParameterType::PARAMETER_BOOL_ARRAY: {
+          YAML::Node seq;
+          for (bool b : p.as_bool_array()) seq.push_back(b);
+          rp[n] = seq;
+          break;
+        }
+        case rclcpp::ParameterType::PARAMETER_STRING_ARRAY: {
+          YAML::Node seq;
+          for (const auto & str : p.as_string_array()) seq.push_back(str);
+          rp[n] = seq;
+          break;
+        }
+        default: break;  // byte_array not supported
+      }
+    }
+    std::stringstream after; after << root;
+    if (before.str() == after.str()) {
+      return;  // no value actually changed -> skip the write (avoid churn)
+    }
+    try {
+      const std::string tmp = file + ".tmp";
+      {
+        std::ofstream o(tmp);
+        if (!o) {
+          return;  // cannot open temp file -> give up quietly, do not throw
+        }
+        o << root;
+      }
+      std::rename(tmp.c_str(), file.c_str());  // atomic replace
+    } catch (...) {
+      // A failed persist must NEVER throw out of the set-parameters callback
+      // (that would abort the node's parameter handling). Swallow and continue.
+    }
+  }
 
   class ParamListener{
   public:
@@ -198,10 +296,44 @@ struct StackParams {
       }
 {%- endif %}
       updated_params.__stamp = clock_.now();
+
+      // [rekise] behaviour flags (from param_def.yaml): decide persist + apply-timing.
+      // read_only is handled natively by ROS (the set never reaches here).
+      static const std::set<std::string> kVolatileParams = {
+{%- for n in volatile_params %}
+        "{{n}}",
+{%- endfor %}
+      };
+      static const std::set<std::string> kRequiredRestartParams = {
+{%- for n in required_restart_params %}
+        "{{n}}",
+{%- endfor %}
+      };
+      auto rel_name = [this](const std::string & n) {
+        return (n.rfind(prefix_, 0) == 0) ? n.substr(prefix_.size()) : n;
+      };
+      bool needs_restart = false;
+      std::vector<rclcpp::Parameter> to_persist;   // volatile params are never persisted
+      for (const auto & p : parameters) {
+        const std::string r = rel_name(p.get_name());
+        if (kRequiredRestartParams.count(r)) needs_restart = true;
+        if (!kVolatileParams.count(r)) to_persist.push_back(p);
+      }
+      if (needs_restart) {
+        // values already validated above; save for next launch, do NOT apply live
+        persist_runtime_override(override_file_, to_persist);
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = false;
+        result.reason = "parameter requires restart: saved to user_config, applies on next launch";
+        return result;
+      }
+
       update_internal_params(updated_params);
       if (user_callback_) {
          user_callback_(updated_params);
       }
+      // [rekise] persist accepted changes (volatile excluded); no-op if no override file set
+      persist_runtime_override(override_file_, to_persist);
       return rsl::to_parameter_result_msg({});
     }
 
@@ -237,6 +369,57 @@ struct StackParams {
       user_callback_ = {};
     }
 
+    // [rekise] point the listener at this node's override-layer file; accepted runtime
+    // changes are persisted there (persist-before-commit) so they survive a relaunch.
+    // ALSO load+apply the values already in that file (override layer) on top of the
+    // factory params, so a relaunch picks up the latest durable change. Runtime params
+    // only — read-only params are skipped. This is the READ half of the override layer;
+    // it runs only when a node sets an override file (i.e. under the config-manager launch).
+    void set_override_file(std::string path){
+      override_file_ = std::move(path);
+      if (override_file_.empty()) {
+        return;
+      }
+      YAML::Node root;
+      try {
+        root = YAML::LoadFile(override_file_);
+      } catch (...) {
+        return;
+      }
+      if (!root || !root.IsMap() || root.size() == 0) {
+        return;
+      }
+      const std::string fqn = root.begin()->first.as<std::string>();
+      YAML::Node rp = root[fqn]["ros__parameters"];
+      if (!rp || !rp.IsMap()) {
+        return;
+      }
+      for (auto it = rp.begin(); it != rp.end(); ++it) {
+        const std::string name = prefix_ + it->first.as<std::string>();
+        if (!parameters_interface_->has_parameter(name)) {
+          continue;
+        }
+        try {
+          const rclcpp::ParameterType t = parameters_interface_->get_parameter(name).get_type();
+          rclcpp::Parameter p;
+          switch (t) {
+            case rclcpp::ParameterType::PARAMETER_DOUBLE:  p = rclcpp::Parameter(name, it->second.as<double>());      break;
+            case rclcpp::ParameterType::PARAMETER_INTEGER: p = rclcpp::Parameter(name, it->second.as<int64_t>());     break;
+            case rclcpp::ParameterType::PARAMETER_BOOL:    p = rclcpp::Parameter(name, it->second.as<bool>());        break;
+            case rclcpp::ParameterType::PARAMETER_STRING:  p = rclcpp::Parameter(name, it->second.as<std::string>()); break;
+            case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY:  p = rclcpp::Parameter(name, it->second.as<std::vector<double>>());      break;
+            case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY: p = rclcpp::Parameter(name, it->second.as<std::vector<int64_t>>());     break;
+            case rclcpp::ParameterType::PARAMETER_BOOL_ARRAY:    p = rclcpp::Parameter(name, it->second.as<std::vector<bool>>());        break;
+            case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:  p = rclcpp::Parameter(name, it->second.as<std::vector<std::string>>()); break;
+            default: continue;
+          }
+          parameters_interface_->set_parameters({p});   // -> update(): validate + apply + persist (no-op)
+        } catch (...) {
+          // read-only / type mismatch / invalid -> skip this key, keep going
+        }
+      }
+    }
+
     private:
       void update_internal_params(Params updated_params) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -249,6 +432,7 @@ struct StackParams {
       std::shared_ptr<rclcpp::node_interfaces::OnSetParametersCallbackHandle> handle_;
       std::shared_ptr<rclcpp::node_interfaces::NodeParametersInterface> parameters_interface_;
       userParameterUpdateCB user_callback_;
+      std::string override_file_;  // [rekise] override-layer file for persistence (empty = disabled)
 
       rclcpp::Logger logger_;
       std::mutex mutable mutex_;

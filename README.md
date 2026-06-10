@@ -92,13 +92,19 @@ my_node:
     validation:
       one_of<>: [["auto", "manual", "off"]]
 
-  # array param (persists; reloaded at launch)
+  # variable-length array (any length) — persists; reloaded at launch
   calib_offsets:
     type: double_array
     default_value: [0.0, 0.0, 0.0]
     description: "Per-axis offsets"
+    # no size validation -> any length allowed
+
+  # same, but pin the length (fixed_size<> is OPTIONAL)
+  imu_bias:
+    type: double_array
+    default_value: [0.0, 0.0, 0.0]
     validation:
-      fixed_size<>: 3
+      fixed_size<>: 3          # or: size_gt<> / size_lt<> for length bounds
 
   # nested group (params live under a sub-struct)
   filtering:

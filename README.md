@@ -9,28 +9,38 @@
 
 ### 1. Behaviour flags (in your `param_def.yaml`)
 
-| flag | live `ros2 param set` | written to `user_config` | applied on next configure / relaunch |
+> **Default is safe: `volatile` defaults to `true`.** A parameter with no flags applies live but is
+> **never persisted** to `user_config`. To make a change persist, the developer must explicitly
+> opt in with `volatile: false`. This prevents static / forgotten parameters from accidentally
+> being written to `user_config`.
+
+| flags | live `ros2 param set` | written to `user_config` | applied on next configure / relaunch |
 |---|---|---|---|
-| *(none — normal)* | ✅ applied | ✅ yes | ✅ |
-| `volatile: true` | ✅ applied | ❌ no | — |
-| `required_restart: true` | ❌ rejected | ✅ yes | ✅ |
+| *(none)* — i.e. `volatile: true` (default) | ✅ applied | ❌ no | — |
+| `volatile: false` (normal / persistent) | ✅ applied | ✅ yes | ✅ |
+| `volatile: false` + `required_restart: true` | ❌ rejected (live) | ✅ yes | ✅ |
 | `read_only: true` | ❌ rejected *(native)* | ❌ | — |
 
-`volatile` and `required_restart` are mutually exclusive (codegen errors if both set).
+`volatile` and `required_restart` are mutually exclusive. Since `volatile` defaults to `true`, a
+`required_restart` parameter **must** set `volatile: false` explicitly (codegen errors otherwise).
 
 ```yaml
 my_node:
-  publish_rate_hz:
-    type: double
-    default_value: 1.0
-    required_restart: true     # save now, apply on next launch (not live)
   gain:
     type: double
     default_value: 2.0
-    volatile: true             # apply live, never saved
+    # no flags -> volatile (default): applies live, never saved
+
   fluid_density:
     type: double
-    default_value: 1029.0      # normal: apply live + save
+    default_value: 1029.0
+    volatile: false            # normal: apply live AND persist
+
+  publish_rate_hz:
+    type: double
+    default_value: 1.0
+    volatile: false            # required by required_restart
+    required_restart: true     # save now, apply on next launch (not live)
 ```
 
 ### 2. Allowed parameter definition (full reference)
@@ -45,8 +55,8 @@ A parameter entry may use these keys:
 | `validation` | | validator functions (`bounds<>`, `lt<>`, `gt<>`, `lt_eq<>`, `gt_eq<>`, `one_of<>`, `fixed_size<>`, `size_gt<>`, `not_empty`, …) |
 | `additional_constraints` | | free-text note appended to the description |
 | `read_only` | | reject any live change (set once at declaration) — native |
-| `volatile` | | **[fork]** apply live, never persisted |
-| `required_restart` | | **[fork]** persist; not applied live; applies on next configure/relaunch |
+| `volatile` | | **[fork]** apply live, never persisted. **Defaults to `true`** — set `volatile: false` to persist |
+| `required_restart` | | **[fork]** persist; not applied live; applies on next configure/relaunch (requires `volatile: false`) |
 
 > `volatile` and `required_restart` cannot both be set on the same parameter.
 
@@ -54,11 +64,12 @@ Example covering every allowed field:
 
 ```yaml
 my_node:
-  # normal numeric param with bounds — applies live AND persists
+  # normal numeric param with bounds — applies live AND persists (must opt in to persist)
   fluid_density:
     type: double
     default_value: 1029.0
     description: "Water density (kg/m^3)"
+    volatile: false
     validation:
       bounds<>: [1.0, 1100.0]
 
@@ -67,16 +78,17 @@ my_node:
     type: double
     default_value: 1.0
     description: "Publish rate (Hz)"
+    volatile: false            # required: volatile defaults true
     required_restart: true
     validation:
       bounds<>: [1.0, 10.0]
 
-  # volatile toggle — applies live, never written to user_config
+  # volatile toggle (this is the DEFAULT) — applies live, never written to user_config
   debug_enabled:
     type: bool
     default_value: false
     description: "Verbose debug logging"
-    volatile: true
+    # volatile: true is the default; shown here for clarity
 
   # structural / read-only — cannot change at runtime
   frame_id:
@@ -97,12 +109,14 @@ my_node:
     type: double_array
     default_value: [0.0, 0.0, 0.0]
     description: "Per-axis offsets"
+    volatile: false            # opt in to persist
     # no size validation -> any length allowed
 
   # same, but pin the length (fixed_size<> is OPTIONAL)
   imu_bias:
     type: double_array
     default_value: [0.0, 0.0, 0.0]
+    volatile: false
     validation:
       fixed_size<>: 3          # or: size_gt<> / size_lt<> for length bounds
 

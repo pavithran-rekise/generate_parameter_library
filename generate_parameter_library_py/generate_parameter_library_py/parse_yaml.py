@@ -789,11 +789,15 @@ def preprocess_inputs(language, name, value, nested_name_list):
 
     description = value.get('description', '')
     read_only = bool(value.get('read_only', False))
-    volatile_flag = bool(value.get('volatile', False))            # [rekise]
+    # [rekise] volatile defaults TRUE (safe: a runtime change is NOT persisted to user_config
+    # unless the developer explicitly opts in with `volatile: false`).
+    volatile_flag = bool(value.get('volatile', True))
     required_restart = bool(value.get('required_restart', False))  # [rekise]
     if volatile_flag and required_restart:
         raise compile_error(
-            "Parameter %s cannot be both 'volatile' and 'required_restart'" % param_name
+            "Parameter %s cannot be both 'volatile' and 'required_restart'. "
+            "A required_restart parameter must set 'volatile: false' explicitly "
+            "(volatile defaults to true)." % param_name
         )
     validations = []
     additional_constraints = value.get('additional_constraints', '')

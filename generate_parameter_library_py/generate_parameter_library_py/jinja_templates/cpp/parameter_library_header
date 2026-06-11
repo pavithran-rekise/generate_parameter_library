@@ -399,30 +399,42 @@ struct StackParams {
         return;
       }
       loading_override_ = true;  // [rekise] applying persisted overrides -> apply even required_restart, don't re-persist
-      for (auto it = rp.begin(); it != rp.end(); ++it) {
-        const std::string name = prefix_ + it->first.as<std::string>();
-        if (!parameters_interface_->has_parameter(name)) {
-          continue;
-        }
-        try {
-          const rclcpp::ParameterType t = parameters_interface_->get_parameter(name).get_type();
-          rclcpp::Parameter p;
-          switch (t) {
-            case rclcpp::ParameterType::PARAMETER_DOUBLE:  p = rclcpp::Parameter(name, it->second.as<double>());      break;
-            case rclcpp::ParameterType::PARAMETER_INTEGER: p = rclcpp::Parameter(name, it->second.as<int64_t>());     break;
-            case rclcpp::ParameterType::PARAMETER_BOOL:    p = rclcpp::Parameter(name, it->second.as<bool>());        break;
-            case rclcpp::ParameterType::PARAMETER_STRING:  p = rclcpp::Parameter(name, it->second.as<std::string>()); break;
-            case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY:  p = rclcpp::Parameter(name, it->second.as<std::vector<double>>());      break;
-            case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY: p = rclcpp::Parameter(name, it->second.as<std::vector<int64_t>>());     break;
-            case rclcpp::ParameterType::PARAMETER_BOOL_ARRAY:    p = rclcpp::Parameter(name, it->second.as<std::vector<bool>>());        break;
-            case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:  p = rclcpp::Parameter(name, it->second.as<std::vector<std::string>>()); break;
-            default: continue;
+      // [rekise] walk the tree so the override file accepts BOTH a flat dotted key
+      // ("topic_name.depth: x") and a nested map ("topic_name: {depth: x}"). A map is
+      // recursed; a scalar/sequence is a leaf parameter named by the dotted path.
+      std::function<void(const std::string &, const YAML::Node &)> apply_node =
+        [&](const std::string & path, const YAML::Node & node) {
+          if (node.IsMap()) {
+            for (auto it = node.begin(); it != node.end(); ++it) {
+              const std::string key = it->first.as<std::string>();
+              apply_node(path.empty() ? key : path + "." + key, it->second);
+            }
+            return;
           }
-          parameters_interface_->set_parameters({p});   // -> update(): validate + apply (restart-reject bypassed)
-        } catch (...) {
-          // read-only / type mismatch / invalid -> skip this key, keep going
-        }
-      }
+          const std::string name = prefix_ + path;
+          if (!parameters_interface_->has_parameter(name)) {
+            return;
+          }
+          try {
+            const rclcpp::ParameterType t = parameters_interface_->get_parameter(name).get_type();
+            rclcpp::Parameter p;
+            switch (t) {
+              case rclcpp::ParameterType::PARAMETER_DOUBLE:  p = rclcpp::Parameter(name, node.as<double>());      break;
+              case rclcpp::ParameterType::PARAMETER_INTEGER: p = rclcpp::Parameter(name, node.as<int64_t>());     break;
+              case rclcpp::ParameterType::PARAMETER_BOOL:    p = rclcpp::Parameter(name, node.as<bool>());        break;
+              case rclcpp::ParameterType::PARAMETER_STRING:  p = rclcpp::Parameter(name, node.as<std::string>()); break;
+              case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY:  p = rclcpp::Parameter(name, node.as<std::vector<double>>());      break;
+              case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY: p = rclcpp::Parameter(name, node.as<std::vector<int64_t>>());     break;
+              case rclcpp::ParameterType::PARAMETER_BOOL_ARRAY:    p = rclcpp::Parameter(name, node.as<std::vector<bool>>());        break;
+              case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:  p = rclcpp::Parameter(name, node.as<std::vector<std::string>>()); break;
+              default: return;
+            }
+            parameters_interface_->set_parameters({p});   // -> update(): validate + apply (restart-reject bypassed)
+          } catch (...) {
+            // read-only / type mismatch / invalid -> skip this key, keep going
+          }
+        };
+      apply_node("", rp);
       loading_override_ = false;
     }
 

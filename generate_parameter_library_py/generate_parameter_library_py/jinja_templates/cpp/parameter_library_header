@@ -317,7 +317,9 @@ struct StackParams {
       for (const auto & p : parameters) {
         const std::string r = rel_name(p.get_name());
         if (kRequiredRestartParams.count(r)) needs_restart = true;
-        if (!kVolatileParams.count(r)) to_persist.push_back(p);
+        // [rekise] persist under the RELATIVE (unprefixed) key — set_override_file re-applies
+        // prefix_ on load, so the file must store relative names (works for prefixed listeners).
+        if (!kVolatileParams.count(r)) to_persist.emplace_back(r, p.get_parameter_value());
       }
       if (needs_restart && !loading_override_) {
         // values already validated above; save for next launch, do NOT apply live

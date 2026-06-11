@@ -5,6 +5,9 @@
 > runtime parameter change, *whether it applies live* and *whether it persists*.
 > The original upstream README is kept in full **below this section**.
 
+> **Integrating into a ROS 2 package?** See **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — step-by-step
+> wiring (package.xml, CMakeLists, node code, override file, build/run, gotchas).
+
 ## What this fork adds
 
 ### 1. Behaviour flags (in your `param_def.yaml`)

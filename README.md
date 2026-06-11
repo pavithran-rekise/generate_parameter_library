@@ -52,7 +52,7 @@ A parameter entry may use these keys:
 | `type` | ✅ | `int` / `double` / `bool` / `string` and their `_array` forms (and fixed `_array_<N>`) |
 | `default_value` | | compiled-in default used when nothing overrides it |
 | `description` | | human-readable doc string |
-| `validation` | | validator functions (`bounds<>`, `lt<>`, `gt<>`, `lt_eq<>`, `gt_eq<>`, `one_of<>`, `fixed_size<>`, `size_gt<>`, `not_empty`, …) |
+| `validation` | | map of validator functions → args. **Full list + when-to-use in [§2a](#2a-validators-full-reference).** |
 | `additional_constraints` | | free-text note appended to the description |
 | `read_only` | | reject any live change (set once at declaration) — native |
 | `volatile` | | **[fork]** apply live, never persisted. **Defaults to `true`** — set `volatile: false` to persist |
@@ -127,6 +127,76 @@ my_node:
       default_value: 5
       validation:
         gt_eq<>: [1]
+```
+
+### 2a. Validators (full reference)
+
+`validation:` is a map of `validator<>` → arguments. Every check runs on **both** paths — runtime
+`ros2 param set` **and** override-file load — and rejects atomically (no silent clamp). Combine as many
+as you like per parameter. All come from `rsl` ([source](https://github.com/PickNikRobotics/RSL/blob/main/include/rsl/parameter_validators.hpp)).
+
+**Scalar value** (`int`, `double`; `one_of` also `string`/`bool`)
+
+| validator | YAML form | passes when | use when |
+|---|---|---|---|
+| `bounds<>` | `bounds<>: [lo, hi]` | `lo ≤ x ≤ hi` (inclusive) | a value must stay in a closed range (rate, density, %) |
+| `gt<>` | `gt<>: [v]` | `x > v` | strictly-positive / above a floor (e.g. `> 0`) |
+| `gt_eq<>` | `gt_eq<>: [v]` | `x ≥ v` | non-negative / at-least (e.g. counts `≥ 1`) |
+| `lt<>` | `lt<>: [v]` | `x < v` | strictly below a ceiling |
+| `lt_eq<>` | `lt_eq<>: [v]` | `x ≤ v` | at-most a ceiling |
+| `one_of<>` | `one_of<>: [[a, b, c]]` | `x ∈ {a,b,c}` | enum / mode string from a fixed set |
+
+> Don't combine `bounds<>` with `gt/gt_eq/lt/lt_eq` on the same param (codegen errors) — use one or the other.
+
+**Array element value** (numeric arrays — each element checked)
+
+| validator | YAML form | passes when | use when |
+|---|---|---|---|
+| `element_bounds<>` | `element_bounds<>: [lo, hi]` | every elem in `[lo, hi]` | per-axis limits (gains, offsets) |
+| `lower_element_bounds<>` | `lower_element_bounds<>: [lo]` | every elem `≥ lo` | floor on each element |
+| `upper_element_bounds<>` | `upper_element_bounds<>: [hi]` | every elem `≤ hi` | ceiling on each element |
+| `subset_of<>` | `subset_of<>: [[a, b, c]]` | every elem ∈ set | array of enum-like tokens (e.g. `command_interfaces`) |
+| `unique<>` | `unique<>:` | no duplicate elements | lists that must not repeat (names, ids) |
+
+> `element_bounds<>` cannot be combined with `lower_/upper_element_bounds<>` on the same param.
+
+**Size / length** (arrays — and strings, where size = char count)
+
+| validator | YAML form | passes when | use when |
+|---|---|---|---|
+| `fixed_size<>` | `fixed_size<>: N` | length `== N` | exact-length vector (quaternion=4, RGB=3) |
+| `size_gt<>` | `size_gt<>: N` | length `> N` | at least N+1 elements |
+| `size_lt<>` | `size_lt<>: N` | length `< N` | fewer than N elements (cap) |
+| `not_empty<>` | `not_empty<>:` | length `≥ 1` | must supply at least one value |
+
+> A fixed type (`double_array_fixed_3`) auto-adds `size_lt<> N+1` — no need to write a size validator for it.
+
+Example combining several:
+
+```yaml
+my_node:
+  gains:                       # 3 numbers, each in [0, 10], length pinned to 3
+    type: double_array
+    default_value: [1.0, 1.0, 1.0]
+    volatile: false
+    validation:
+      fixed_size<>: 3
+      element_bounds<>: [0.0, 10.0]
+
+  sensor_ids:                  # non-empty, no duplicates
+    type: string_array
+    default_value: ["imu0"]
+    volatile: false
+    validation:
+      not_empty<>:
+      unique<>:
+
+  retries:                     # integer ≥ 0
+    type: int
+    default_value: 3
+    volatile: false
+    validation:
+      gt_eq<>: [0]
 ```
 
 ### 3. The override file (`user_config`)

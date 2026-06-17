@@ -1,14 +1,21 @@
-# Using the Rekise fork in a ROS 2 package
+# Using the Rekise fork in a ROS 2 package (overview)
 
 How to add `generate_parameter_library` (Rekise fork) to **any** ROS 2 package and get:
-typed + validated parameters, the three behaviour flags (`read_only` / `volatile` / `required_restart`),
-and a persistent per-node **override layer** (`user_config`) that survives a relaunch.
+typed + validated parameters and the three behaviour flags (`read_only` / `volatile` / `required_restart`).
 
-> Read alongside the [README](../README.md): §2 = the param-def keys, §2a = the full validator list.
-> Background on the flag contract: README §1.
+> **The two focused guidelines are authoritative — use those:**
+> - **[GUIDE_1_add_to_package.md](GUIDE_1_add_to_package.md)** — add the library to a package (deps, spec, CMake, build).
+> - **[GUIDE_2_integrate_in_code.md](GUIDE_2_integrate_in_code.md)** — use it in the node.
+>
+> **Rekise convention (since 2026-06-17):** the node writes **no** override code. The generated
+> `ParamListener` auto-reads `CONFIG_OVERRIDE_FILE` (set per-node by the launch), applies the
+> `user_config` override on top of the resolved baseline, and **persists accepted runtime changes
+> there during validation** — automatic + durable, zero node code. §4–§5 below describe the same
+> mechanism with the (now-unnecessary) explicit `set_override_file` call; the library does it for you.
+>
+> README: §2 = param-def keys, §2a = validators, §1 = flag contract.
 
-Worked end-to-end example: `cm_ws/src/rkse_hsal_depth_bluerobotics_driver` (lifecycle) and
-`cm_ws/src/gpl_flag_test` (plain). Test evidence: `gpl_flag_test/TEST_RESULTS.md`.
+Worked end-to-end example: `vessel_demo/vessel_ws/src/rkse_hsal_depth_bluerobotics_driver` (lifecycle).
 
 ---
 

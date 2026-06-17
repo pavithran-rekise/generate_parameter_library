@@ -29,6 +29,7 @@
 #include <yaml-cpp/yaml.h>
 #include <fstream>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 
 {% if user_validation_file|length -%}
@@ -208,6 +209,18 @@ struct StackParams {
       auto update_param_cb = [this](const std::vector<rclcpp::Parameter> &parameters){return this->update(parameters);};
       handle_ = parameters_interface_->add_on_set_parameters_callback(update_param_cb);
       clock_ = rclcpp::Clock();
+      // [rekise] Auto-wire the override / persistence file from the env the LAUNCH sets, so the
+      // node needs NO override code. When CONFIG_OVERRIDE_FILE is set, set_override_file() loads it
+      // on top of the declared values and persistence happens automatically during validation
+      // (in update()). Unset env -> no override layer (compiled/effective values only).
+      // COMPOSITION (deferred, ROB-SD-002 §6.1): env is per-PROCESS, so it only distinguishes nodes
+      // while each node is its own process. When nodes are composed into one process, switch this
+      // single getenv to a per-node reserved parameter read (e.g. "__override_file") — nothing else moves.
+      if (const char * override_env = std::getenv("CONFIG_OVERRIDE_FILE")) {
+        if (override_env[0] != '\0') {
+          set_override_file(override_env);
+        }
+      }
     }
 
     Params get_params() const{

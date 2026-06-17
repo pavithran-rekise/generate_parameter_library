@@ -4,8 +4,7 @@ How to consume the generated parameter library inside your node: build a `ParamL
 override layer, read the validated typed struct, and react to live changes. Assumes the package is
 already set up per **Guideline 1 — Add to package** (deps, `config/params.yaml`, CMake codegen).
 
-> **Copy-paste starting point:** `config_manager/examples/rkse_example_driver/` (full template:
-> spec + node + launch + CMake). Real in-tree example: `rkse_hsal_depth_bluerobotics_driver/src/depth_node.cpp`.
+> Real building example to copy from: `rkse_hsal_depth_bluerobotics_driver/src/depth_node.cpp` (lifecycle).
 > Flag contract: fork README §1.
 
 ---

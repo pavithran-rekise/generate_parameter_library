@@ -8,9 +8,7 @@ This guide is **package setup only** (deps, CMake, the spec file, build). Using 
 your node is **Guideline 2 — Integrate in code**.
 
 > Reference: fork [`README.md`](../README.md) §2 (param-def keys), §2a (full validator list), §1 (flag contract).
-> **Copy-paste starting point:** the full template package
-> `config_manager/examples/rkse_example_driver/` (buildable; package.xml + CMake + spec + node + launch).
-> Real in-tree example: `rkse_hsal_depth_bluerobotics_driver`.
+> Real building example to copy from: `rkse_hsal_depth_bluerobotics_driver` (lifecycle node + GPL).
 
 ---
 
